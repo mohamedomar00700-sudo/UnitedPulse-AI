@@ -1,0 +1,5 @@
+{
+  "name": "United Pharmacies Attendance Tool",
+  "description": "A smart attendance tracking tool for Soft Skills lectures. It compares attendee names from Excel sheets with Zoom screenshots using AI to handle cross-lingual (Arabic/English) matching and spelling variations.",
+  "requestFramePermissions": []
+}
