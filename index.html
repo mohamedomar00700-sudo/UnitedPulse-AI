@@ -32,5 +32,11 @@
 </head>
   <body>
     <div id="root"></div>
+    <!-- تأمين وجود كائن process لمنع انهيار التطبيق في المتصفح -->
+    <script>
+      window.process = window.process || { env: { API_KEY: "" } };
+    </script>
+    <!-- نقطة انطلاق التطبيق -->
+    <script type="module" src="./index.tsx"></script>
   </body>
 </html>

@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import Header from './components/Header';
 import { extractNamesFromExcel } from './services/excelService';
 import { processAttendance, extractNamesFromImage } from './services/geminiService';
@@ -7,44 +7,57 @@ import { ProcessingResult, AttendanceStatus, MatchSensitivity, Attendee } from '
 import * as XLSX from 'xlsx';
 
 const App: React.FC = () => {
-  // Input Selection Mode
+  // الحالات الأساسية
   const [sourceMode, setSourceMode] = useState<'excel' | 'image'>('excel');
-  
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [officialImage, setOfficialImage] = useState<File | null>(null);
   const [excelNamesCount, setExcelNamesCount] = useState<number>(0);
-  
   const [screenshots, setScreenshots] = useState<File[]>([]);
+  
+  // حالات المعالجة
   const [loading, setLoading] = useState(false);
   const [progressLog, setProgressLog] = useState<string[]>([]);
   const [sensitivity, setSensitivity] = useState<MatchSensitivity>(MatchSensitivity.BALANCED);
+  const [error, setError] = useState<string | null>(null);
   
+  // حالات النتائج
   const [rawResults, setRawResults] = useState<ProcessingResult | null>(null);
   const [isReviewing, setIsReviewing] = useState(false);
   const [finalResults, setFinalResults] = useState<ProcessingResult | null>(null);
   
-  const [error, setError] = useState<string | null>(null);
+  // حالات التفاعل
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
-
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<AttendanceStatus | null>(null);
 
-  // وظيفة إعادة تعيين النظام بالكامل بدلاً من reload
-  const resetApp = () => {
+  // وظيفة إعادة تعيين النظام بالكامل لمنع الكراش
+  const resetApp = useCallback(() => {
+    setLoading(false);
+    setIsReviewing(false);
+    setRawResults(null);
+    setFinalResults(null);
     setExcelFile(null);
     setOfficialImage(null);
     setExcelNamesCount(0);
     setScreenshots([]);
-    setLoading(false);
     setProgressLog([]);
-    setRawResults(null);
-    setIsReviewing(false);
-    setFinalResults(null);
     setError(null);
     setSearchTerm('');
     setSelectedNames(new Set());
     setSourceMode('excel');
+    setShowBulkConfirm(false);
+    setPendingStatus(null);
+  }, []);
+
+  const getStatusLabel = (status: AttendanceStatus | null) => {
+    if (!status) return "غير محدد";
+    switch (status) {
+      case AttendanceStatus.PRESENT: return "حاضر";
+      case AttendanceStatus.ABSENT: return "غائب";
+      case AttendanceStatus.UNEXPECTED: return "خارج الكشف";
+      default: return "غير محدد";
+    }
   };
 
   const fileToBase64 = (file: File): Promise<string> => {
@@ -66,7 +79,7 @@ const App: React.FC = () => {
         const names = await extractNamesFromExcel(file);
         setExcelNamesCount(names.length);
       } catch (err) {
-        setError("خطأ في قراءة ملف الإكسيل");
+        setError("خطأ في قراءة ملف الإكسيل، يرجى التأكد من الصيغة.");
       }
     }
   };
@@ -89,7 +102,7 @@ const App: React.FC = () => {
   const runAnalysis = async () => {
     const hasSource = sourceMode === 'excel' ? !!excelFile : !!officialImage;
     if (!hasSource || screenshots.length === 0) {
-      setError("يرجى التأكد من رفع كشف الأسماء (إكسيل أو صورة) ولقطات زووم");
+      setError("يرجى التأكد من رفع كشف الأسماء (إكسيل أو صورة) ولقطات زووم أولاً.");
       return;
     }
 
@@ -106,7 +119,7 @@ const App: React.FC = () => {
         setProgressLog(["جاري استخراج الأسماء من صورة الكشف الرسمي..."]);
         const b64 = await fileToBase64(officialImage);
         officialNames = await extractNamesFromImage(b64, true);
-        setProgressLog([`تم استخراج ${officialNames.length} اسم من الصورة.`]);
+        setProgressLog([`تم استخراج ${officialNames.length} اسم من الصورة بنجاح.`]);
       }
 
       if (!officialNames || officialNames.length === 0) {
@@ -128,7 +141,8 @@ const App: React.FC = () => {
       });
       setIsReviewing(true);
     } catch (err: any) {
-      setError(err.message || "حدث خطأ غير متوقع أثناء معالجة البيانات.");
+      console.error(err);
+      setError(err.message || "حدث خطأ غير متوقع أثناء معالجة البيانات، يرجى المحاولة لاحقاً.");
     } finally {
       setLoading(false);
     }
@@ -149,6 +163,7 @@ const App: React.FC = () => {
   };
 
   const finalizeReport = () => {
+    if (!rawResults) return;
     setFinalResults(rawResults);
     setIsReviewing(false);
   };
@@ -156,7 +171,10 @@ const App: React.FC = () => {
   const filteredDisplay = useMemo(() => {
     if (!finalResults) return null;
     const term = searchTerm.toLowerCase();
-    const filterFn = (a: Attendee) => a.name.toLowerCase().includes(term) || (a.originalName?.toLowerCase().includes(term));
+    const filterFn = (a: Attendee) => 
+      a.name.toLowerCase().includes(term) || 
+      (a.originalName?.toLowerCase().includes(term));
+      
     return {
       present: finalResults.present.filter(filterFn),
       absent: finalResults.absent.filter(filterFn),
@@ -178,6 +196,7 @@ const App: React.FC = () => {
 
   const handleBulkStatusChange = () => {
     if (!finalResults || !pendingStatus) return;
+    
     const all = [...finalResults.present, ...finalResults.absent, ...finalResults.unexpected];
     const moved = all.filter(a => selectedNames.has(a.name));
     const remaining = all.filter(a => !selectedNames.has(a.name));
@@ -198,12 +217,13 @@ const App: React.FC = () => {
     });
     setSelectedNames(new Set());
     setShowBulkConfirm(false);
+    setPendingStatus(null);
   };
 
   const exportExcel = () => {
     if (!finalResults) return;
     const data = [
-      ["الاسم", "الحالة", "الاسم في زووم"],
+      ["الاسم", "الحالة", "الاسم الأصلي في زووم"],
       ...finalResults.present.map(p => [p.name, "حاضر", p.originalName || ""]),
       ...finalResults.absent.map(a => [a.name, "غائب", ""]),
       ...finalResults.unexpected.map(u => [u.name, "خارج الكشف", ""])
@@ -211,7 +231,7 @@ const App: React.FC = () => {
     const ws = XLSX.utils.aoa_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Attendance Report");
-    XLSX.writeFile(wb, "United_Attendance_Report.xlsx");
+    XLSX.writeFile(wb, `United_Attendance_${new Date().toLocaleDateString()}.xlsx`);
   };
 
   return (
@@ -226,11 +246,12 @@ const App: React.FC = () => {
             <div className="text-center space-y-4">
               <h2 className="text-5xl font-black tracking-tight text-slate-800">تحليل الحضور والغياب الذكي</h2>
               <p className="text-lg text-slate-500 max-w-2xl mx-auto leading-relaxed">
-                سواء كان كشفك ملف إكسيل أو صورة فوتوغرافية، ذكاؤنا الاصطناعي سيتولى المهمة.
+                سواء كان كشفك ملف إكسيل أو صورة فوتوغرافية، ذكاؤنا الاصطناعي سيتولى المهمة بدقة.
               </p>
             </div>
 
             <div className="grid md:grid-cols-2 gap-10">
+              {/* اختيار مصدر البيانات */}
               <div className="bg-white border border-slate-200 p-8 rounded-[2rem] shadow-sm space-y-8">
                 <div className="flex items-center justify-between">
                   <h3 className="text-2xl font-bold">1. كشف الأسماء الرسمي</h3>
@@ -265,7 +286,7 @@ const App: React.FC = () => {
                       </div>
                       <div>
                         <div className="font-black text-slate-700">{sourceMode === 'excel' ? "اختر ملف إكسيل" : "ارفع صورة الكشف"}</div>
-                        <div className="text-xs text-slate-400 mt-1">{sourceMode === 'excel' ? "سيتم البحث عن عمود الأسماء تلقائياً" : "تأكد من وضوح الأسماء في الصورة"}</div>
+                        <div className="text-xs text-slate-400 mt-1">{sourceMode === 'excel' ? "سيتم البحث عن الأسماء تلقائياً" : "تأكد من وضوح الأسماء في الصورة"}</div>
                       </div>
                       {(excelFile || officialImage) && (
                         <div className="bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold animate-in fade-in zoom-in">
@@ -277,6 +298,7 @@ const App: React.FC = () => {
                 </div>
               </div>
 
+              {/* صور زووم */}
               <div className="bg-white border border-slate-200 p-8 rounded-[2rem] shadow-sm space-y-8">
                 <h3 className="text-2xl font-bold">2. لقطات حضور زووم</h3>
                 <label className="relative block border-2 border-dashed border-slate-200 hover:border-blue-400 bg-slate-50/50 p-10 rounded-3xl cursor-pointer text-center transition-all group">
@@ -300,7 +322,7 @@ const App: React.FC = () => {
             </div>
 
             {error && (
-              <div className="bg-rose-50 border border-rose-200 text-rose-600 p-6 rounded-[2rem] text-center font-bold animate-in zoom-in">
+              <div className="bg-rose-50 border border-rose-200 text-rose-600 p-6 rounded-[2rem] text-center font-bold animate-in zoom-in shadow-sm">
                 {error}
               </div>
             )}
@@ -315,9 +337,9 @@ const App: React.FC = () => {
               {loading ? (
                 <div className="flex items-center justify-center gap-3">
                   <div className="w-6 h-6 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>جاري التحليل...</span>
+                  <span>جاري التحليل الذكي...</span>
                 </div>
-              ) : "بدء مطابقة الحضور"}
+              ) : "بدء مطابقة الحضور الآن"}
             </button>
 
             {loading && (
@@ -368,7 +390,7 @@ const App: React.FC = () => {
               <div className="md:col-span-2 bg-white p-10 rounded-[2.5rem] border border-slate-200 shadow-sm flex flex-col justify-between">
                 <div className="space-y-2">
                   <h2 className="text-4xl font-black text-slate-800">التقرير النهائي</h2>
-                  <p className="text-slate-400 font-medium">تمت معالجة الحضور بنجاح</p>
+                  <p className="text-slate-400 font-medium">تمت معالجة الحضور بنجاح واستخراج النتائج.</p>
                 </div>
                 <div className="flex gap-3 mt-8">
                    <button onClick={exportExcel} className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black hover:bg-emerald-700 shadow-lg transition-all">Excel</button>
@@ -386,6 +408,7 @@ const App: React.FC = () => {
             </div>
 
             <div className="grid md:grid-cols-3 gap-8 min-h-[600px]">
+               {/* الحاضرون */}
                <div className="flex flex-col space-y-4">
                   <div className="bg-emerald-600 p-5 rounded-3xl text-white font-black text-center shadow-lg">الحاضرون</div>
                   <div className="flex-1 bg-white border border-slate-200 rounded-[2rem] p-4 space-y-2 overflow-y-auto max-h-[500px]">
@@ -398,6 +421,7 @@ const App: React.FC = () => {
                   </div>
                </div>
 
+               {/* الغائبون */}
                <div className="flex flex-col space-y-4">
                   <div className="bg-rose-500 p-5 rounded-3xl text-white font-black text-center shadow-lg">الغائبون</div>
                   <div className="flex-1 bg-white border border-slate-200 rounded-[2rem] p-4 space-y-2 overflow-y-auto max-h-[500px]">
@@ -410,6 +434,7 @@ const App: React.FC = () => {
                   </div>
                </div>
 
+               {/* خارج الكشف */}
                <div className="flex flex-col space-y-4">
                   <div className="bg-amber-500 p-5 rounded-3xl text-white font-black text-center shadow-lg">خارج الكشف</div>
                   <div className="flex-1 bg-white border border-slate-200 rounded-[2rem] p-4 space-y-2 overflow-y-auto max-h-[500px]">
@@ -423,6 +448,7 @@ const App: React.FC = () => {
                </div>
             </div>
 
+            {/* شريط الإجراءات الجماعية */}
             {selectedNames.size > 0 && (
               <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-40 no-print animate-in slide-in-from-bottom-20 duration-500">
                 <div className="bg-slate-900/90 backdrop-blur-2xl text-white px-10 py-6 rounded-[2.5rem] shadow-2xl border border-slate-800 flex items-center gap-10">
@@ -449,14 +475,15 @@ const App: React.FC = () => {
         ) : null}
       </main>
 
+      {/* مودال التأكيد */}
       {showBulkConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/40 backdrop-blur-sm">
           <div className="bg-white rounded-[2.5rem] shadow-2xl p-10 max-w-md w-full space-y-8 animate-in zoom-in">
             <h3 className="text-3xl font-black text-slate-800 text-center">تغيير الحالة</h3>
-            <p className="text-slate-500 text-center font-medium">سيتم تغيير حالة {selectedNames.size} أسماء. هل أنت متأكد؟</p>
+            <p className="text-slate-500 text-center font-medium">سيتم تغيير حالة {selectedNames.size} أسماء إلى <strong>"{getStatusLabel(pendingStatus)}"</strong>. هل أنت متأكد؟</p>
             <div className="grid grid-cols-2 gap-4">
               <button onClick={() => setShowBulkConfirm(false)} className="py-4 border-2 border-slate-200 rounded-2xl font-black text-slate-400">تراجع</button>
-              <button onClick={handleBulkStatusChange} className="py-4 bg-emerald-600 text-white rounded-2xl font-black">تأكيد</button>
+              <button onClick={handleBulkStatusChange} className="py-4 bg-emerald-600 text-white rounded-2xl font-black">تأكيد التغيير</button>
             </div>
           </div>
         </div>
