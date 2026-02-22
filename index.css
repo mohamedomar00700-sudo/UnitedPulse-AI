@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+@theme {
+  --color-united-green: #009639;
+  --color-united-blue: #004a99;
+  --font-tajawal: "Tajawal", sans-serif;
+}
+
+@layer base {
+  body {
+    @apply font-tajawal;
+  }
+}
+
+@layer utilities {
+  .print-only {
+    display: none;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .max-h-\[600px\], .overflow-y-auto {
+    max-height: none !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+}
